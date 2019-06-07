@@ -1,0 +1,317 @@
+---
+title: "Differential Expression: {{name}}"
+author: "`r getOption('author')`"
+date: "`r Sys.Date()`"
+params:
+  design: !r formula("{{design}}")
+  contrasts: !r list({{contrasts}})
+  alpha: 0.01
+  lfc_threshold: 0.5
+  data_dir: !r file.path("../data", Sys.Date())
+  results_dir: !r file.path("../results", Sys.Date(), "differential_expression")
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, message=FALSE}
+options(stringsAsFactors = FALSE)
+bcbioRNASeq::prepareRNASeqTemplate()
+source("_setup.R"); source("_utils.R"); source("_plotting.R")
+
+library(data.table); library(pca3d); library(rcartocolor); library(genefilter); library(tximport)
+
+# Directory paths ==============================================================
+invisible(mapply(
+    FUN = dir.create,
+    path = c(params$data_dir, params$results_dir),
+    MoreArgs = list(showWarnings = FALSE, recursive = TRUE)
+))
+
+```
+
+## Introduction
+
+
+```{r import_counts, message=FALSE, warning=FALSE, results='hide'}
+
+# Read in gencode annotations
+gtf <- rtracklayer::import("../input/annotation/gencode.vM20.annotation.gtf")
+
+
+#TODO: put this parsing in a setup file to clean this up.
+names(gtf@elementMetadata@listData)[which(names(gtf@elementMetadata@listData) == "gene_id")] <-
+  "geneID"
+names(gtf@elementMetadata@listData)[which(names(gtf@elementMetadata@listData) == "gene_name")] <-
+  "geneName"
+names(gtf@elementMetadata@listData)[which(names(gtf@elementMetadata@listData) == "gene_type")] <-
+  "geneBiotype"
+gtf@elementMetadata$id <- gtf@elementMetadata$geneID
+
+
+gtfdf <- gtf %>% as.data.frame()
+g2s <- as.data.frame(gtf@elementMetadata@listData) %>% select(geneID, geneName) %>% distinct()
+tx2gene <- gtfdf %>%
+  mutate(TXNAME = transcript_id, GENEID = geneID) %>%
+  select(TXNAME, GENEID)
+
+
+
+# Read in sample annotations
+samples <- read.csv("../sample_info/{{sample_sheet}}", header = FALSE) %>%
+  separate(V1, into = c("Gene", "Tissue", "{{gene_knockedout}}", "Replicate",
+                        "SampleID", "Index", "Lane", "Read", "ftype", "gz")) %>%
+  select(SampleID, Tissue, Gene, {{gene_knockedout}}) %>%
+  distinct() %>%
+  unite(Condition, c("Tissue", "{{gene_knockedout}}"), remove = FALSE)
+rownames(samples) <- samples$SampleID
+
+
+
+
+
+# Read in the salmon counts data.
+files <- file.path("../results", "salmon", samples$SampleID, "quant.sf")
+names(files) <- samples$SampleID
+txi.salmon <- tximport(files, type = "salmon", tx2gene = tx2gene)
+
+
+gene_ids_used <- rownames(txi.salmon$counts)
+gtf <- gtf[which(gtf$geneID %in% gene_ids_used)]
+gtf <- gtf[which(gtf$type == "gene")]
+```
+
+
+
+```{r create_DESeqDataSet}
+# Create DESeq2 experiment objects.
+dds <- DESeq2::DESeqDataSetFromTximport(txi.salmon,
+                                        colData   = samples,
+                                        design    = params$design,
+                                        rowRanges = gtf)
+```
+
+# Pre-filtering
+
+While it is not necessary to pre-filter low count genes before running the DESeq2 functions, there are two reasons which make pre-filtering useful: by removing rows in which there are very few reads, we reduce the memory size of the dds data object, and we increase the speed of the transformation and testing functions within DESeq2. Here we perform a minimal pre-filtering to keep only rows that have at least 10 reads total. Note that more strict filtering to increase power is automatically applied via independent filtering on the mean of normalized counts within the `results()` function.
+
+```{r prefilter}
+# Note that this criteria can be made more stringent
+keep <- rowSums(counts(dds)) >= 10
+dds <- dds[keep, ]
+print(dds)
+```
+
+
+# Factor reference level
+
+By default, [R][] will choose a reference level for factors based on alphabetical order. Then, if you never tell the [DESeq2][] functions which level you want to compare against (e.g. which level represents the control group), the comparisons will be based on the alphabetical order of the levels. There are two solutions: you can either explicitly tell results which comparison to make using the contrast argument (this will be shown later), or you can explicitly set the factors levels. You should only change the factor levels of variables in the design before running the [DESeq2][] analysis, not during or afterward. Setting the factor levels can be done in two ways, using either the `factor()` or `relevel()` functions. Generally we recommend using `relevel()` here.
+
+```{r relevel, eval=FALSE}
+# Specify the reference level (preferred)
+# dds$Tug1 <- relevel(dds$Tug1, ref = "WT")
+
+# # Alternatively, can explicitly define, using `factor()`
+# # When using this approach, put the reference level (control) first
+# dds$treatment <- factor(dds$treatment, levels = c("control", "folic_acid"))
+
+# print(dds$Tug1)
+```
+
+# Differential expression analysis
+
+Now that our `DESeqDataSet` is properly set up, we can move on to performing the differential expression. The standard differential expression analysis steps for [DESeq2][] are wrapped into a single function, `DESeq()`. Results tables are generated using the function `results()`, which extracts a results table with log2 fold changes, *P* values and adjusted *P* values. With no additional arguments to `results()`, the log2 fold change and Wald test *P* value will be for the last variable in the design formula (`design()`), and if this is a factor, the comparison will be the last level of this variable over the reference level (see previous note on factor levels). However, the order of the variables of the design do not matter so long as the user specifies the comparison to build a results table for, using the name or contrast arguments of results.
+
+```{r deseq}
+dds <- DESeq(dds)
+saveData(dds, dir = params$data_dir)
+```
+
+# Variance stabilization
+
+After we perform the differential expression, we need to calculate variance-stabilized counts, which are stored in a `DESeqTransform` object. These transformed counts are useful for visualization. We currently recommend using `varianceStabilizingTransformation()` but `rlog()` is a good alternate.
+
+```{r variance_stabilization}
+# Alternatively, can use `rlog()` here, but it is slower
+rld <- varianceStabilizingTransformation(dds)
+interestingGroups(rld) <- c("Condition")
+saveData(rld, dir = params$data_dir)
+```
+
+# Results
+
+For contrast argument as character vector:
+
+1. Design matrix factor of interest.
+2. Numerator for LFC (expt).
+3. Denominator for LFC (control).
+
+```{r contrasts}
+# factor; numerator; denominator
+# levels(dds$genotype)
+# help("results", "DESeq2")
+stopifnot(is.list(params$contrasts))
+contrasts <- params$contrasts
+names <- vapply(
+    X = contrasts,
+    FUN = function(x) {
+        paste(x[[1]], x[[2]], "vs", x[[3]], sep = "_")
+
+    },
+    FUN.VALUE = "character"
+)
+names(contrasts) <- names
+print(contrasts)
+```
+
+
+```{r res_unshrunken}
+res_list_unshrunken <- mapply(
+    FUN = results,
+    contrast = contrasts,
+    MoreArgs = list(
+        object = dds,
+        alpha = params$alpha
+    ),
+    SIMPLIFY = FALSE,
+    USE.NAMES = FALSE
+)
+names(res_list_unshrunken) <- names
+saveData(res_list_unshrunken, dir = params$data_dir)
+```
+
+Now let's calculate shrunken log2 fold change values with `DESeq2::lfcShrink()`. We're using the "normal" shrinkage estimator (default in DESeq2); the "apeglm" shrinkage estimator is also promising but doens't work well with complex contrast designs.
+
+```{r res_shrunken}
+# For `type` arguments other than "normal", `coef` argument is required.
+# Otherwise can use `contrast`, which is more intuitive and readable.
+# If using `coef` number, must match order in `resultsNames(dds)`.
+# The new apeglm method is great but currently only works with coef.
+# help("lfcShrink", "DESeq2")
+# help("coef", "DESeq2")
+# help("resultsNames", "DESeq2")
+# This step can be a little slow and sped up with the `parallel` argument.
+res_list_shrunken <- mapply(
+    FUN = lfcShrink,
+    res = res_list_unshrunken,
+    contrast = contrasts,
+    MoreArgs = list(
+        dds = dds,
+        type = "normal"
+    ),
+    SIMPLIFY = FALSE,
+    USE.NAMES = TRUE
+)
+saveData(res_list_shrunken, dir = params$data_dir)
+```
+
+
+Let's save a copy of the prior information used during the shrinkage procedure.
+
+```{r prior_info}
+lapply(res_list_shrunken, priorInfo)
+```
+
+We performed the analysis using a BH adjusted *P* value cutoff of `r params$alpha` and a log fold-change (LFC) ratio cutoff of `r params$lfc_threshold`.
+
+
+# Plots
+
+## PCA
+
+Principal Component Analysis (PCA) is a statistical technique used to identify global patterns in high-dimensional datasets. It is commonly used to explore the similarity of biological samples in RNA-seq datasets. To achieve this, gene expression values are transformed into Principal Components (PCs), a set of linearly uncorrelated features which represent the most relevant sources of variance in the data, and subsequently visualized using a scatter plot.
+
+Each point represents an RNA-seq sample. Samples with similar gene expression profiles are closer in the three-dimensional space. If provided, sample groups are indicated using different colors, allowing for easier interpretation of the results.
+
+```{r plot_deg_pca, message=FALSE}
+plotDEGPCA(res_list_shrunken[[1]], counts = rld)
+```
+
+
+## Heatmap
+
+This plot shows only differentially expressed genes on a per-sample basis. We have scaled the data by row and used the `ward.D2` method for clustering [@Ward1963-xf].
+
+```{r plot_deg_heatmap}
+plotDEGHeatmap(res_list_shrunken[[1]], counts = rld, clusteringMethod = "ward.D2", scale = "row")
+```
+
+## Gene scatter plots {.tabset .tabset-fade .tabset-pills}
+
+### Mean average (MA)
+
+An MA plot compares transformed counts on `M` (log ratio) and `A` (mean average) scales [@Yang2002-sx].
+
+```{r plot_ma}
+plotMA(res_list_shrunken[[6]], lfcThreshold = params$lfc_threshold, ntop = 15, gene2symbol = g2s)
+```
+
+### Volcano
+
+A volcano plot compares significance (BH-adjusted *P* value) against fold change (log2) [@Cui2003-rn; @Li2014-ll].
+
+```{r plot_volcano}
+plotVolcano(res_list_shrunken[[6]], lfcThreshold = params$lfc_threshold, ntop = 15, gene2symbol = g2s)
+```
+
+
+
+# Results tables
+
+Subset the results into separate tables, containing all genes, differentially expressed genes in both directions, and directional tables.
+
+```{r results_tables, results="asis"}
+# Here we're creating subset tables of the DEGs, and adding the normalized
+# counts used by DESeq2 for the differential expression analysis.
+mdout <- capture.output(res_tbl_list <- mapply(
+    FUN = resultsTables,
+    results = res_list_shrunken,
+    MoreArgs = list(
+        counts = dds,
+        lfcThreshold = params$lfc,
+        summary = TRUE,
+        headerLevel = 2,
+        write = TRUE,
+        dir = params$results_dir,
+        dropboxDir = params$dropbox_dir,
+        rdsToken = params$dropbox_token
+    ),
+    SIMPLIFY = FALSE,
+    USE.NAMES = TRUE
+))
+
+# This is a little hack to force the dropbox links to autodownload.
+mdout <- gsub("dl=0", "dl=1", mdout)
+cat(paste(mdout,collapse="\n"))
+
+
+saveData(res_tbl_list, dir = params$data_dir)
+```
+
+
+Differentially expressed gene (DEG) tables are sorted by BH-adjusted P value, and contain the following columns:
+
+- `baseMean`: Mean of the normalized counts per gene for all samples.
+- `log2FoldChange`: log2 fold change.
+- `lfcSE`: log2 standard error.
+- `stat`: Wald statistic.
+- `pvalue`: Walt test *P* value.
+- `padj`: BH adjusted Wald test *P* value (corrected for multiple comparisons; aka FDR).
+
+## Top tables
+
+Only the top up- and down-regulated genes (arranged by log2 fold change) are shown.
+
+## Top tables
+
+Only the top up- and down-regulated genes (arranged by log2 fold change) are shown.
+
+```{r top_tables, results="asis"}
+invisible(mapply(
+    FUN = topTables,
+    object = res_tbl_list,
+    MoreArgs = list(coding = FALSE)
+))
+```
+
+```{r footer, child="_footer.Rmd"}
+```
