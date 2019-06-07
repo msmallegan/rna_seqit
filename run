@@ -1,0 +1,24 @@
+#!/bin/bash
+#SBATCH -p short
+#SBATCH --job-name={{name}}
+#SBATCH --mail-type=ALL
+#SBATCH --mail-user={{email}}
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=6gb
+#SBATCH --time=12:00:00
+#SBATCH --output=./log/slurm.log
+#SBATCH --error=./log/slurm.err
+
+pwd; hostname; date
+
+export PATH=/opt/singularity/3.1.1/bin:$PATH
+
+nextflow \
+  -log ./log/nextflow.log \
+  run main.nf \
+  -resume \
+  -with-report ./reports/{{name}}.html \
+  -with-dag ./reports/{{name}}_dag.pdf
+
+date
