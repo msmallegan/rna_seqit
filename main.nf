@@ -1,9 +1,9 @@
 #!/usr/bin/env nextflow
-params.name        = "{{title}}"
-params.email       = "{{email}}"
-params.reads       = "${baseDir}/input/fastq/{{readfile_pattern}}.fq.gz"
-params.genome      = "{{genome_url}}"
-params.annotation  = "{{annotation_url}}"
+params.name             = "Rinn Lab RNA-seq test"
+params.email            = "michael.smallegan@colorado.edu"
+params.reads            = "${baseDir}/input/fastq/*{*_R1,*_R2}.fastq.gz"
+params.genome           = "ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/GRCm38.primary_assembly.genome.fa.gz"
+params.annotation       = "ftp://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_mouse/release_M21/gencode.vM21.annotation.gtf.gz"
 
 
 
@@ -43,25 +43,7 @@ process retrieve_annotation {
 
 
 
-process deduplicate_annotation {
-
-  publishDir 'results/annotation'
-
-  input:
-  file gtf from annotation
-
-  output:
-  file('*_deduped.gtf') into annotation_deduped
-
-  script:
-  """
-  Rscript ${baseDir}/bin/deduplicate_gtf.R ${gtf}
-  """
-}
-
-
-
-annotation_deduped.into {
+annotation.into {
   annotation_for_index;
   annotation_for_count;
   annotation_for_transcriptome;
@@ -76,7 +58,7 @@ process retrieve_genome {
   publishDir 'results/genome'
 
   output:
-  file('*.fna') into genome
+  file('*.fa') into genome
 
   script:
   """
@@ -150,7 +132,7 @@ process index {
   STAR  --runThreadN 64 \
   --runMode genomeGenerate \
   --genomeDir ./index \
-  --genomeFastaFiles ${genome_fasta} \
+  --genomeFastaFiles ${genome_for_index} \
   --sjdbGTFfile ${annotation_for_index}
   """
 }
@@ -174,8 +156,8 @@ process map {
   """
   STAR  --runThreadN 4 \
   --genomeDir ${index} \
-  --readFilesIn ${reads.findAll{ it =~ /\_1\./ }.join(',')} \
-                ${reads.findAll{ it =~ /\_2\./ }.join(',')} \
+  --readFilesIn ${reads.findAll{ it =~ /\_R1\./ }.join(',')} \
+                ${reads.findAll{ it =~ /\_R2\./ }.join(',')} \
   --readFilesCommand zcat \
   --outSAMtype BAM Unsorted \
   --outSAMunmapped Within \
@@ -295,7 +277,7 @@ process qorts {
   """
   java -Xmx34G -jar ${baseDir}/bin/QoRTs.jar QC \
     --generatePlots \
-    --rawfastq ${reads.findAll{ it =~ /\_1\./ }.join(',')},${reads.findAll{ it =~ /\_2\./ }.join(',')} \
+    --rawfastq ${reads.findAll{ it =~ /\_R1\./ }.join(',')},${reads.findAll{ it =~ /\_R2\./ }.join(',')} \
     ${bam} \
     ${annotation_for_qorts} \
     ${sample_id}
