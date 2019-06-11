@@ -118,6 +118,7 @@ process index {
 
   memory '60 GB'
   clusterOptions '--nodes=1 --ntasks=64'
+  publishDir 'results/star_index'
 
   input:
   file genome_for_index
