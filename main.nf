@@ -316,8 +316,6 @@ process mark_duplicates {
 
 process dupradar {
 
-  container false
-
   publishDir "results/dupradar",
     mode: 'copy',
     saveAs: {filename ->
