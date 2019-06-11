@@ -118,6 +118,7 @@ process index {
 
   memory '60 GB'
   clusterOptions '--nodes=1 --ntasks=64'
+  publishDir 'results/star_index'
 
   input:
   file genome_for_index
@@ -275,7 +276,7 @@ process qorts {
 
   script:
   """
-  qorts QC \
+  java -Xmx34G -jar /usr/local/anaconda/share/qorts-1.3.0-1/QoRTs.jar QC \
     --generatePlots \
     --rawfastq ${reads.findAll{ it =~ /\_R1\./ }.join(',')},${reads.findAll{ it =~ /\_R2\./ }.join(',')} \
     ${bam} \
@@ -300,7 +301,7 @@ process mark_duplicates {
 
   script:
   """
-  picard MarkDuplicates \\
+  java -Xmx16G -jar /usr/local/anaconda/share/picard-2.20.2-0/picard.jar MarkDuplicates \\
     INPUT=${bam} \\
     OUTPUT=${bam.baseName}.markDups.bam \\
     METRICS_FILE=${bam.baseName}.markDups_metrics.txt \\
