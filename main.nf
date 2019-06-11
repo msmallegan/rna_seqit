@@ -243,11 +243,11 @@ process sort_bam {
 
   script:
   """
-  ${baseDir}/bin/samtools sort --threads 4 \
+  samtools sort --threads 4 \
     -m 4G \
     -o ${sample_id}.bam \
     ${bam_file}
-    igvtools index ${sample_id}.bam
+  samtools index ${sample_id}.bam
   """
 }
 
@@ -275,7 +275,7 @@ process qorts {
 
   script:
   """
-  java -Xmx34G -jar ${baseDir}/bin/QoRTs.jar QC \
+  qorts QC \
     --generatePlots \
     --rawfastq ${reads.findAll{ it =~ /\_R1\./ }.join(',')},${reads.findAll{ it =~ /\_R2\./ }.join(',')} \
     ${bam} \
@@ -308,7 +308,7 @@ process mark_duplicates {
     ASSUME_SORTED=true \\
     PROGRAM_RECORD_ID='null' \\
     VALIDATION_STRINGENCY=LENIENT
-    ${baseDir}/bin/samtools index ${bam.baseName}.markDups.bam
+  samtools index ${bam.baseName}.markDups.bam
   """
 }
 
