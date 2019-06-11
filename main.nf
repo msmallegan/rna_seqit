@@ -300,7 +300,7 @@ process mark_duplicates {
 
   script:
   """
-  java -Xmx16G -jar ${baseDir}/bin/picard-2.6.0.jar MarkDuplicates \\
+  picard MarkDuplicates \\
     INPUT=${bam} \\
     OUTPUT=${bam.baseName}.markDups.bam \\
     METRICS_FILE=${bam.baseName}.markDups_metrics.txt \\
