@@ -22,8 +22,7 @@ reads = Channel.fromFilePairs(params.reads, size: -1)
   .ifEmpty { error "Can't find any reads matching: ${params.reads}" }
   .into {
     reads_for_fastqc;
-    reads_for_mapping;
-    reads_for_qorts
+    reads_for_mapping
   }
 
 
@@ -46,9 +45,7 @@ process retrieve_annotation {
 annotation.into {
   annotation_for_index;
   annotation_for_count;
-  annotation_for_transcriptome;
-  annotation_for_qorts;
-  annotation_for_dupradar
+  annotation_for_transcriptome
 }
 
 
@@ -71,8 +68,7 @@ process retrieve_genome {
 
 genome.into {
   genome_for_transcriptome;
-  genome_for_index;
-  genome_for_qorts
+  genome_for_index
 }
 
 
@@ -174,7 +170,6 @@ process map {
 mapped_genome.into {
   mapped_for_count;
   mapped_for_igv;
-  mapped_for_qorts;
   mapped_for_markduplicates
 }
 
@@ -254,97 +249,6 @@ process sort_bam {
 
 
 
-sorted_bam.into {
-  sorted_for_qorts;
-  sorted_for_picard
-}
-
-
-
-process qorts {
-
-  publishDir 'results/qorts'
-  clusterOptions '--mem=40gb'
-
-  input:
-  file genome_for_qorts
-  file annotation_for_qorts
-  set sample_id, file(reads), file(bam), file(bai) from reads_for_qorts.join(sorted_for_qorts)
-
-  output:
-  file "${sample_id}" into qorts_for_multiqc
-
-  script:
-  """
-  java -Xmx34G -jar /usr/local/anaconda/share/qorts-1.3.0-1/QoRTs.jar QC \
-    --generatePlots \
-    --rawfastq ${reads.findAll{ it =~ /\_R1\./ }.join(',')},${reads.findAll{ it =~ /\_R2\./ }.join(',')} \
-    ${bam} \
-    ${annotation_for_qorts} \
-    ${sample_id}
-  """
-}
-
-
-
-process mark_duplicates {
-
-  publishDir "results/markDuplicates"
-
-  input:
-  set sample_id, file(bam), file(bai) from sorted_for_picard
-
-  output:
-  file "${bam.baseName}.markDups.bam" into duplicate_marked_bam
-  file "${bam.baseName}.markDups_metrics.txt" into picard
-  file "${bam.baseName}.markDups.bam.bai"
-
-  script:
-  """
-  java -Xmx16G -jar /usr/local/anaconda/share/picard-2.20.2-0/picard.jar MarkDuplicates \\
-    INPUT=${bam} \\
-    OUTPUT=${bam.baseName}.markDups.bam \\
-    METRICS_FILE=${bam.baseName}.markDups_metrics.txt \\
-    REMOVE_DUPLICATES=false \\
-    ASSUME_SORTED=true \\
-    PROGRAM_RECORD_ID='null' \\
-    VALIDATION_STRINGENCY=LENIENT
-  samtools index ${bam.baseName}.markDups.bam
-  """
-}
-
-
-
-process dupradar {
-
-  publishDir "results/dupradar",
-    mode: 'copy',
-    saveAs: {filename ->
-      if (filename.indexOf("_duprateExpDens.pdf") > 0) "scatter_plots/${filename}"
-      else if (filename.indexOf("_duprateExpBoxplot.pdf") > 0) "box_plots/${filename}"
-      else if (filename.indexOf("_expressionHist.pdf") > 0) "histograms/${filename}"
-      else if (filename.indexOf("_dupMatrix.txt") > 0) "gene_data/${filename}"
-      else if (filename.indexOf("_duprateExpDensCurve.txt") > 0) "scatter_curve_data/${filename}"
-      else if (filename.indexOf("_intercept_slope.txt") > 0) "intercepts_slopes/${filename}"
-      else "${filename}"
-    }
-
-  input:
-  file duplicate_marked_bam
-  file gtf from annotation_for_dupradar.collect()
-
-  output:
-  file "*.{pdf,txt}"
-
-  script:
-  """
-  Rscript ${baseDir}/bin/dupRadar.r \
-    ${duplicate_marked_bam} ${gtf} 0 'paired' ${task.cpus}
-  """
-}
-
-
-
 process compile_fastqc {
 
   input:
@@ -357,23 +261,6 @@ process compile_fastqc {
   """
   mkdir fastqc
   mv ${fastqc} fastqc/.
-  """
-}
-
-
-
-process compile_qorts {
-
-  input:
-  file qorts from qorts_for_multiqc.collect()
-
-  output:
-  file "qorts" into qorts_compiled
-
-  script:
-  """
-  mkdir qorts
-  mv ${qorts} qorts/.
   """
 }
 
@@ -430,23 +317,6 @@ process compile_counts {
 
 
 
-process compile_picard {
-
-  input:
-  file picard from picard.collect()
-
-  output:
-  file "picard" into picard_compiled
-
-  script:
-  """
-  mkdir picard
-  mv ${picard} picard/.
-  """
-}
-
-
-
 process multiqc {
 
   publishDir "results/multiqc"
@@ -455,10 +325,8 @@ process multiqc {
   input:
   file fastqc from fastqc_compiled
   file star from star_compiled
-  file qorts from qorts_compiled
   file salmon from salmon_compiled
   file counts from counts_compiled
-  file picard from picard_compiled
 
   output:
   set file('*_multiqc_report.html'), file('*_data/*')
@@ -470,10 +338,8 @@ process multiqc {
 
   multiqc ${fastqc} \
     ${star} \
-    ${qorts} \
     ${salmon} \
     ${counts} \
-    ${picard} \
     --title '${params.name}' \
     --cl_config "extra_fn_clean_exts: [ '_1', '_2' ]"
   """
